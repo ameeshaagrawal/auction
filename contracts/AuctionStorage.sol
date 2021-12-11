@@ -20,7 +20,8 @@ contract AuctionStorage is Ownable {
         uint256 taskStartTime;
         uint256 taskTimeLimit;
         address workerSelected;
-        uint256 amount;
+        uint256 bidAmount;
+        uint256 amountStaked;
         bytes32 submittedWork;
         bool isSettled;
     }
@@ -30,9 +31,11 @@ contract AuctionStorage is Ownable {
     uint256 public bettingPeriod;
     uint256 public taskSettlementPeriod;
     uint256 public taskId;
+    uint256 public MIN_BET_STAKE = 10**8;
 
     event BettingPeriodUpdated(uint256 bettingPeriod);
     event TaskSettlementPeriodUpdated(uint256 taskSettlementPeriod);
+    event BetStakeUpdated(uint256 betStake);
     event TaskCreated(
         address taskOwner,
         uint256 taskId,

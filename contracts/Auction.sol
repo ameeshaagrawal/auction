@@ -25,18 +25,24 @@ contract Auction is AuctionStorage {
         external
         onlyOwner
     {
-        require(_taskSettlementPeriod != 0, "INVALID_BETTING_PERIOD");
+        require(_taskSettlementPeriod != 0, "INVALID_SETTLEMENT_PERIOD");
         taskSettlementPeriod = _taskSettlementPeriod;
         emit TaskSettlementPeriodUpdated(_taskSettlementPeriod);
     }
 
+    function updateMinBetStake(uint256 _minBetStake) external onlyOwner {
+        require(_minBetStake != 0, "INVALID_MIN_BET_STAKE");
+        MIN_BET_STAKE = _minBetStake;
+        emit BetStakeUpdated(_minBetStake);
+    }
+
     function createTask(bytes32 taskDescription, uint256 timeLimit) external {
-        require(taskDescription.length != 0, "NEED_TASK_DESCRIPTION");
+        require(taskDescription != bytes32(0), "NEED_TASK_DESCRIPTION");
         require(timeLimit != 0, "TIME_LIMIT_CANNOT_BE_ZERO");
 
         taskId = taskId + 1;
 
-        Task storage _task = tasks[taskId++];
+        Task storage _task = tasks[taskId];
         _task.taskDescription = taskDescription;
         _task.taskTimeLimit = timeLimit;
         _task.taskStartTime = block.timestamp;
@@ -51,19 +57,21 @@ contract Auction is AuctionStorage {
         );
     }
 
-    function bet(uint256 taskId) external payable {
+    function bet(uint256 taskId, uint256 bidAmount) external payable {
         Task storage task = tasks[taskId];
         require(getState(taskId) == States.BETTING, "NOT_IN_BETTING_STATE");
-        require(msg.value > 0 && msg.value > task.amount, "BET_AMOUNT_TOO_LOW");
-
+        require(msg.value >= MIN_BET_STAKE, "NEED_MIN_STAKE");
+        require(bidAmount != 0, "BET_AMOUNT_CANNOT_BE_ZERO");
         address previousWorker;
         uint256 previousBet;
-        if (task.amount > 0) {
+        if (task.bidAmount > 0) {
+            require(bidAmount < task.bidAmount, "BET_AMOUNT_HIGH");
             previousWorker = task.workerSelected;
-            previousBet = task.amount;
+            previousBet = task.amountStaked;
         }
 
-        task.amount = msg.value;
+        task.amountStaked = msg.value;
+        task.bidAmount = bidAmount;
         task.workerSelected = msg.sender;
 
         if (previousBet > 0) safeTransferETH(previousWorker, previousBet);
@@ -84,13 +92,17 @@ contract Auction is AuctionStorage {
         States state = getState(taskId);
         Task storage task = tasks[taskId];
 
+        require(
+            state == States.TASK_SUBMITTED || state == States.SLASHED,
+            "CANNOT_BE_SETTLED"
+        );
         require(!task.isSettled, "ALREADY_SETTLED");
 
         address paidTo;
-        uint256 amountPaid = task.amount.add(msg.value);
+        uint256 amountPaid = task.amountStaked.add(msg.value);
 
         if (state == States.TASK_SUBMITTED) {
-            require(msg.value > 0, "NO_FEE_RECEIVED");
+            require(msg.value >= task.bidAmount, "NO_PAYMENT_RECEIVED");
             paidTo = task.workerSelected;
         } else if (state == States.SLASHED) {
             paidTo = task.taskOwner;
@@ -110,23 +122,31 @@ contract Auction is AuctionStorage {
     function getState(uint256 taskId) public view returns (States) {
         Task memory task = tasks[taskId];
 
-        if (task.taskDescription.length == 0) {
+        if (task.taskOwner == address(0)) {
             return States.INVALID;
-        } else if (block.timestamp <= bettingPeriod.add(task.taskStartTime)) {
-            return States.BETTING;
-        } else if (
-            block.timestamp >
-            taskSettlementPeriod.add(task.taskStartTime).add(task.taskTimeLimit)
-        ) {
-            if (task.submittedWork.length != 0) {
-                return States.TASK_SUBMITTED;
-            } else {
-                return States.SLASHED;
-            }
-        } else if (task.amount == 0) {
-            return States.CANCELLED;
-        } else {
-            return States.WORK_IN_PROGRESS;
         }
+
+        if (block.timestamp <= bettingPeriod.add(task.taskStartTime)) {
+            return States.BETTING;
+        }
+
+        if (task.bidAmount == 0) {
+            return States.CANCELLED;
+        }
+
+        if (task.submittedWork != bytes32(0)) {
+            return States.TASK_SUBMITTED;
+        }
+
+        if (
+            block.timestamp >
+            (task.taskStartTime).add(bettingPeriod).add(task.taskTimeLimit).add(
+                taskSettlementPeriod
+            )
+        ) {
+            return States.SLASHED;
+        }
+
+        return States.WORK_IN_PROGRESS;
     }
 }
